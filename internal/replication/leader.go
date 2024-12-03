@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"keyvalue-store/internal/network"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +19,7 @@ type LeaderServer struct {
 	LeaderElection *RaftLeaderElection
 	port           string
 	httpServer     *http.Server
+	routeServer    *network.Server
 }
 
 // RaftLeaderElection defines the Raft leader election and heartbeat process
@@ -61,6 +63,8 @@ func (le *LeaderServer) StartLeaderHTTPServer() {
 	http.HandleFunc("/register_follower", le.HandleRegisterFollower)
 	http.HandleFunc("/update_leader", le.HandleUpdateLeader)
 
+	le.routeServer.RegisterRoutes()
+
 	le.httpServer = &http.Server{Addr: le.port}
 
 	log.Printf("Leader Server on port %s is starting...\n", le.port)
@@ -93,7 +97,8 @@ func (le *LeaderServer) StartLeaderHTTPServer() {
 
 // HandleHeartbeat handles heartbeats from followers
 func (le *LeaderServer) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	le.LeaderElection.Heartbeat()
+	log.Println("hearbet request received")
+	//le.LeaderElection.Heartbeat()
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Leader %s is alive in term %d", le.LeaderElection.leaderID, le.LeaderElection.term)
 }
@@ -140,6 +145,7 @@ func (le *RaftLeaderElection) StartLeaderElection() {
 
 // Heartbeat updates the last heartbeat and notifies followers
 func (le *RaftLeaderElection) Heartbeat() {
+	log.Printf("Leader %s sent heartbeat in term %d.", le.leaderID, le.term)
 	le.mutex.Lock()
 	le.lastHeartbeat = time.Now()
 	le.mutex.Unlock()

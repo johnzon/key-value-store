@@ -16,14 +16,21 @@ func NewServer(store *storage.Storage) *Server {
 	return &Server{store: store}
 }
 
-func (s *Server) Start(address string) {
+func (s *Server) RegisterRoutes() {
 	http.HandleFunc("/put", s.handlePut)
 	http.HandleFunc("/read", s.handleRead)
 	http.HandleFunc("/range", s.handleReadRange)
 	http.HandleFunc("/batchput", s.handleBatchPut)
 	http.HandleFunc("/delete", s.handleDelete)
+}
 
+func (s *Server) Start(address string) {
 	log.Printf("Starting server on %s...\n", address)
+
+	// Register the routes
+	s.RegisterRoutes()
+
+	// Start listening for incoming requests
 	log.Fatal(http.ListenAndServe(address, nil))
 }
 

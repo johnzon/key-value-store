@@ -250,149 +250,139 @@ Follow the steps below to set up and run the KeyValue-Store application.
 1. Deployment: Adding docker to be able to run the application without installing go
 2. More test coverage
 3. Leader election : Ocassionally, previous failed leader instanceId is being returned as the leader Id. This is being resolved but keeping track of failed leaders. Submitted like this due to time constraint
-## KeyValue-Store Application Endpoints 
 
-<div class="endpoint">
-   <h4>1. Heartbeat (internal use)</h4>
-   <p><strong>Endpoint:</strong> 
-   <code>GET /heartbeat</code></p>
-   <p><strong>Description:</strong> Used by the leader to send heartbeat signals to followers.</p>
-   <h5>Sample Request:</h5>
-   <pre>curl -X GET "http://localhost:8080/heartbeat"</pre>
-   <h5>Sample Response:</h5>
-   <pre>{"message": "Leader <leader_id> is alive in term <term>"}
-        </pre>
-    </div>
-<div class="endpoint">
-   <h4>2. Register Follower (internal use)</h4>
-   <p><strong>Endpoint:</strong> <code>POST /register_follower</code></p>
-   <p><strong>Description:</strong> Used by followers to register themselves with the leader.</p>
-   <h5>Sample Request:</h5>
-   <pre>
-curl -X POST "http://localhost:8080/register_follower?url=http://localhost:8081"</pre>
-  <h5>Sample Response:</h5>
-  <pre>
-{
-    "message": "Follower http://localhost:8081 registered successfully"
-}
-        </pre>
-    </div>
+## API Endpoints for Key-Value Store
 
-   <div class="endpoint">
-        <h4>3. Update Leader (internal)</h4>
-        <p><strong>Endpoint:</strong> <code>POST /update_leader</code></p>
-        <p><strong>Description:</strong> Used to update the leader information with all registered followers.</p>
+### 1. `/put` Route - Put a Key-Value Pair
 
-   <h5>Request Body:</h5>
-   <pre>
-{
-    "leaderId": "<new_leader_id>"
-}
-   </pre>
+- **HTTP Method**: `PUT`
+- **Endpoint**: `/put?key={key}`
+- **Expected Payload**: The `key` is provided as a query parameter, and the value is sent in the request body.
+- **Sample Request**:
+    ```bash
+    curl -X PUT "http://localhost:8080/put?key=myKey" -d "myValue"
+    ```
 
-   <h5>Sample Request:</h5>
-   <pre>
-curl -X POST "http://localhost:8080/update_leader" -d '{"leaderId":"new-leader-id"}' -H "Content-Type: application/json"
-        </pre>
-<h5>Sample Response:</h5>
-<pre>
-{
-    "message": "Leader updated to new-leader-id"
-}
-        </pre>
-    </div>
-<div class="endpoint">
-        <h4>4. PUT (Store Key-Value Pair)</h4>
-        <p><strong>Endpoint:</strong> <code>POST /put</code></p>
-        <p><strong>Description:</strong> Used to store a key-value pair in the key-value store.</p>
-<h5>Request Body:</h5>
-        <pre>
-{
-    "key": "sampleKey",
-    "value": "sampleValue"
-}
-        </pre>
-<h5>Sample Request:</h5>
-<pre>
-curl -X POST "http://localhost:8080/put" -d '{"key":"sampleKey","value":"sampleValue"}' -H "Content-Type: application/json"
-        </pre>
-<h5>Sample Response:</h5>
-        <pre>
-{
-    "message": "Key-value pair added successfully"
-}
- </pre>
-    </div>
-<div class="endpoint">
-        <h4>5. Read (Get Value by Key)</h4>
-        <p><strong>Endpoint:</strong> <code>GET /read</code></p>
-        <p><strong>Description:</strong> Used to retrieve a value by its key.</p>
-<h5>Sample Request:</h5>
-        <pre>
-curl -X GET "http://localhost:8080/read?key=sampleKey"
-        </pre>
-<h5>Sample Response:</h5>
-        <pre>
-{
-    "key": "sampleKey",
-    "value": "sampleValue"
-}
-        </pre>
-    </div>
-<div class="endpoint">
-        <h4>6. Range (Read a Range of Keys)</h4>
-        <p><strong>Endpoint:</strong> <code>GET /range</code></p>
-        <p><strong>Description:</strong> Used to retrieve a range of key-value pairs.</p>
-<h5>Sample Request:</h5>
-        <pre>
-curl -X GET "http://localhost:8080/range?startKey=key1&endKey=key5"</pre>
-<h5>Sample Response:</h5><pre>
-[
-    {
-        "key": "key1",
-        "value": "value1"
-    },
-    {
-        "key": "key2",
-        "value": "value2"
-    }
-]
-</pre>
-    </div>
-<div class="endpoint">
-        <h4>7. Batch PUT (Store Multiple Key-Value Pairs)</h4>
-        <p><strong>Endpoint:</strong> <code>POST /batchput</code></p>
-        <p><strong>Description:</strong> Used to store multiple key-value pairs at once.</p>
-<h5>Request Body:</h5>
-        <pre>
-[
-    {"key": "key1", "value": "value1"},
-    {"key": "key2", "value": "value2"}
-]
-        </pre>
-<h5>Sample Request:</h5>
-<pre>
-curl -X POST "http://localhost:8080/batchput" -d '[{"key":"key1","value":"value1"},{"key":"key2","value":"value2"}]' -H "Content-Type: application/json"
-</pre>
-<h5>Sample Response:</h5>
-        <pre>
-{
-    "message": "Batch PUT operation completed successfully"
-}
-        </pre>
-    </div><div class="endpoint">
-        <h4>8. DELETE (Delete a Key-Value Pair)</h4>
-        <p><strong>Endpoint:</strong> <code>DELETE /delete</code></p>
-        <p><strong>Description:</strong> Used to delete a key-value pair.</p>
-<h5>Sample Request:</h5>
-<pre>curl -X DELETE "http://localhost:8080/delete?key=sampleKey"</pre>
-<h5>Sample Response:</h5>
-<pre>
-{
-    "message": "Key-value pair deleted successfully"
-}
-        </pre>
-    </div>
+- **Success Response**:
+    - **HTTP Status**: `200 OK`
+
+- **Error Response**:
+    - If the HTTP method is incorrect: `405 Method Not Allowed`
+    - If the `key` parameter is missing: `400 Bad Request`
+    - If there’s an issue reading the request body: `500 Internal Server Error`
+
+---
+
+### 2. `/read` Route - Read a Value by Key
+
+- **HTTP Method**: `GET`
+- **Endpoint**: `/read?key={key}`
+- **Expected Payload**: The `key` is provided as a query parameter.
+- **Sample Request**:
+    ```bash
+    curl "http://localhost:8080/read?key=myKey"
+    ```
+
+- **Success Response**:
+    - **HTTP Status**: `200 OK`
+    - **Response Body**: The stored value
+    ```json
+    "myValue"
+    ```
+
+- **Error Response**:
+    - If the key is not found: `404 Not Found`
+    - If the `key` parameter is missing: `400 Bad Request`
+    - If the HTTP method is incorrect: `405 Method Not Allowed`
+
+---
+
+### 3. `/range` Route - Read a Range of Keys
+
+- **HTTP Method**: `GET`
+- **Endpoint**: `/range?start={startKey}&end={endKey}`
+- **Expected Payload**: The `start` and `end` keys are provided as query parameters.
+- **Sample Request**:
+    ```bash
+    curl "http://localhost:8080/range?start=startKey&end=endKey"
+    ```
+
+- **Success Response**:
+    - **HTTP Status**: `200 OK`
+    - **Response Body**: A JSON array of key-value pairs
+    ```json
+    [
+      {"key": "startKey", "value": "value1"},
+      {"key": "middleKey", "value": "value2"},
+      {"key": "endKey", "value": "value3"}
+    ]
+    ```
+
+- **Error Response**:
+    - If there’s an issue with the range: `500 Internal Server Error`
+    - If the `start` or `end` parameters are missing: `400 Bad Request`
+    - If the HTTP method is incorrect: `405 Method Not Allowed`
+
+---
+
+### 4. `/batchput` Route - Insert Multiple Key-Value Pairs
+
+- **HTTP Method**: `POST`
+- **Endpoint**: `/batchput`
+- **Expected Payload**: A JSON object where each key maps to a value.
+- **Sample Request**:
+    ```bash
+    curl -X POST "http://localhost:8080/batchput" -H "Content-Type: application/json" -d '{"key1": "value1", "key2": "value2", "key3": "value3"}'
+    ```
+
+- **Success Response**:
+    - **HTTP Status**: `200 OK`
+
+- **Error Response**:
+    - If there’s an issue decoding the JSON: `400 Bad Request`
+    - If there’s an error storing one or more key-value pairs: `500 Internal Server Error`
+    - If the HTTP method is incorrect: `405 Method Not Allowed`
+
+---
+
+### 5. `/delete` Route - Delete a Key
+
+- **HTTP Method**: `DELETE`
+- **Endpoint**: `/delete?key={key}`
+- **Expected Payload**: The `key` is provided as a query parameter.
+- **Sample Request**:
+    ```bash
+    curl -X DELETE "http://localhost:8080/delete?key=myKey"
+    ```
+
+- **Success Response**:
+    - **HTTP Status**: `200 OK`
+
+- **Error Response**:
+    - If the key is not found: `500 Internal Server Error`
+    - If the `key` parameter is missing: `400 Bad Request`
+    - If the HTTP method is incorrect: `405 Method Not Allowed`
+
+---
+
+### Summary of Testing Steps
+
+1. **Test `/put`**:
+    - Send a PUT request with a `key` query parameter and the value as the request body.
+
+2. **Test `/read`**:
+    - Send a GET request with a `key` query parameter to retrieve the stored value.
+
+3. **Test `/range`**:
+    - Send a GET request with `start` and `end` key query parameters to retrieve a range of key-value pairs.
+
+4. **Test `/batchput`**:
+    - Send a POST request with a JSON body containing multiple key-value pairs.
+
+5. **Test `/delete`**:
+    - Send a DELETE request with a `key` query parameter to delete the specified key.
+
+---
 
 
 
