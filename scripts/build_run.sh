@@ -7,7 +7,7 @@ FOLLOWER_PORT_2=:8082
 
 # Define the leader's heartbeat interval and timeout
 HEARTBEAT_INTERVAL="2s"
-HEARTBEAT_TIMEOUT="5s"
+HEARTBEAT_TIMEOUT="10s"
 
 # Define the leader URL for followers to connect to
 LEADER_URL="http://localhost:8080"

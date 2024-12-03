@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"keyvalue-store/internal/replication"
 	"log"
@@ -20,10 +22,8 @@ func main() {
 	leaderHeartbeatTimeout := flag.Duration("leaderHeartbeatTimeout", 5*time.Second, "Timeout for leader heartbeats")
 	leaderURL := flag.String("leaderURL", "http://localhost:8080", "URL of the leader server (for follower)")
 
-	// Parse the command-line flags
 	flag.Parse()
 
-	// Ensure that either the leader or follower flag is provided, but not both
 	if *isLeader && *isFollower {
 		log.Fatal("Cannot start both a leader and a follower at the same time.")
 	}
@@ -47,7 +47,6 @@ func main() {
 		}
 		defer file.Close()
 
-		// Set up cleanup to remove the lock file on program exit
 		defer func() {
 			log.Println("Removing lock file...")
 			err := os.Remove(lockFile)
@@ -58,11 +57,9 @@ func main() {
 			}
 		}()
 
-		//
-		// Generate a unique candidate ID for the leader
-		leaderCandidateID := "leader-instance-1" // Replace this with your unique identifier logic
+		leaderCandidateID := generateLeaderCandidateID()
+		log.Printf("Generated leader candidate ID: %s", leaderCandidateID)
 
-		// Leader configuration with the new signature
 		leaderServer, err := replication.NewLeaderServer(
 			leaderCandidateID,
 			*leaderPort,
@@ -70,8 +67,6 @@ func main() {
 			*leaderHeartbeatTimeout,
 		)
 
-		// Leader configuration
-		//leaderServer, err := replication.NewLeaderServer(*leaderHeartbeatInterval, *leaderHeartbeatTimeout, *leaderPort)
 		if err != nil {
 			log.Fatalf("Failed to create leader server: %v", err)
 		}
@@ -82,7 +77,6 @@ func main() {
 
 		log.Printf("Leader server started on %s...\n", *leaderPort)
 
-		// Wait for termination signal (Ctrl+C or other signals)
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -96,18 +90,14 @@ func main() {
 
 	// Handle follower case
 	if *isFollower {
-		// Follower configuration with the failover manager (we will need a SimpleLeaderElection for failover)
 
-		// Generate a unique candidate ID for the leader
-		leaderCandidateID := "leader-instance-1" // Replace this with your unique identifier logic
+		leaderCandidateID := "leader-instance-1"
 
 		// Updated leader election initialization with candidate ID
 		leaderElection := replication.NewRaftLeaderElection(leaderCandidateID, *leaderHeartbeatInterval, *leaderHeartbeatTimeout)
 
-		// Initialize the failover manager with the updated leader election instance
 		failoverManager := replication.NewFailoverManager(leaderElection, *leaderHeartbeatTimeout)
 
-		// Initialize follower with port, leader URL, and failover manager
 		follower := replication.NewFollower(*followerPort, *leaderURL, failoverManager)
 
 		// Start follower server
@@ -129,5 +119,15 @@ func main() {
 		// Block until we receive a signal
 		<-sigChan
 		log.Println("Received termination signal, shutting down...")
+
 	}
+}
+
+// Generate a random leader candidate ID
+func generateLeaderCandidateID() string {
+	randomBytes := make([]byte, 16) // 16 bytes = 128 bits
+	if _, err := rand.Read(randomBytes); err != nil {
+		log.Fatalf("Failed to generate random leader candidate ID: %v", err)
+	}
+	return hex.EncodeToString(randomBytes)
 }

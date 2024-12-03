@@ -1,10 +1,14 @@
 package replication
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -51,9 +55,51 @@ func (f *Follower) StartFollowerHTTPServer() error {
 		return err
 	}
 
-	go f.MonitorLeader()
-	return f.server.ListenAndServe()
+	// Create a channel to listen for OS signals
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+
+	// Run the server in a separate goroutine
+	go func() {
+		if err := f.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Follower HTTP server failed: %v", err)
+		}
+	}()
+
+	// Wait for a termination signal
+	<-stopChan
+	log.Println("Shutting down follower HTTP server gracefully...")
+
+	// Gracefully shutdown the server with a timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := f.server.Shutdown(ctx); err != nil {
+		log.Fatalf("Follower HTTP server forced to shutdown: %v", err)
+	}
+
+	log.Println("Follower HTTP server shut down successfully.")
+	return nil
 }
+
+// // StartFollowerHTTPServer starts an HTTP server to receive leader heartbeats
+// func (f *Follower) StartFollowerHTTPServer() error {
+// 	http.HandleFunc("/heartbeat", f.HandleHeartbeat)
+
+// 	f.server = &http.Server{Addr: f.serverPort}
+
+// 	log.Printf("Follower %s is listening on %s for leader heartbeats...\n", f.followerID, f.serverPort)
+
+// 	f.lastHeartbeat = time.Now()
+
+// 	err := f.RegisterWithLeader()
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	go f.MonitorLeader()
+// 	return f.server.ListenAndServe()
+// }
 
 // HandleHeartbeat updates the last received heartbeat time and checks leader term
 func (f *Follower) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {

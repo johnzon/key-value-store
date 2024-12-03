@@ -2,11 +2,15 @@ package replication
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -51,15 +55,40 @@ func NewLeaderServer(candidateID, port string, heartbeatInterval, heartbeatTimeo
 }
 
 // StartLeaderHTTPServer starts the HTTP server for leader operations
+// StartLeaderHTTPServer starts the HTTP server for the leader
 func (le *LeaderServer) StartLeaderHTTPServer() {
 	http.HandleFunc("/heartbeat", le.HandleHeartbeat)
 	http.HandleFunc("/register_follower", le.HandleRegisterFollower)
 	http.HandleFunc("/update_leader", le.HandleUpdateLeader)
 
+	le.httpServer = &http.Server{Addr: le.port}
+
 	log.Printf("Leader Server on port %s is starting...\n", le.port)
-	if err := le.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Failed to start leader server: %v", err)
+
+	// Create a channel to listen for OS signals
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+
+	// Run the server in a separate goroutine
+	go func() {
+		if err := le.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start leader server: %v", err)
+		}
+	}()
+
+	// Wait for a termination signal
+	<-stopChan
+	log.Println("Shutting down leader HTTP server gracefully...")
+
+	// Gracefully shutdown the server with a timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := le.httpServer.Shutdown(ctx); err != nil {
+		log.Fatalf("Leader HTTP server forced to shutdown: %v", err)
 	}
+
+	log.Println("Leader HTTP server shut down successfully.")
 }
 
 // HandleHeartbeat handles heartbeats from followers
