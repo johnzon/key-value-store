@@ -1,7 +1,7 @@
 # Persistent Key/Value System Documentation
 
 ## Objective
-To design and implement a network-available, persistent Key/Value store that adheres to the provided interface and achieves specific performance, reliability, and scalability requirements. The system is implemented in [Language of Choice] and uses only the standard library.
+To design and implement a network-available, persistent Key/Value store that adheres to the provided interface and achieves specific performance, reliability, and scalability requirements. The system is implemented in golang and uses only the standard library.
 
 ---
 
@@ -208,30 +208,28 @@ keyvalue-store/
 ├── internal/
 │   ├── storage/            # Storage layer
 │   │   ├── storage.go      # Core storage implementation
-│   │   ├── compaction.go   # Log compaction implementation
-│   │   └── errors.go       # Custom storage-related errors
+│   │   ├── compaction.go   # Log compaction implementation (pending)
+│   │   └── errors.go       # Custom storage-related errors (pending)
 │   ├── transaction/        # Transaction layer
 │   │   ├── wal.go          # Write-ahead logging
 │   │   └── snapshot.go     # Snapshot management
 │   ├── network/            # Networking layer
 │   │   ├── server.go       # HTTP server setup
 │   │   ├── handlers.go     # HTTP API handlers
-│   │   └── middleware.go   # Middleware for logging, metrics, etc.
+│   │   └── middleware.go   # Middleware for logging, metrics, etc. (pending)
 │   ├── replication/        # Replication layer (bonus)
 │   │   ├── leader.go       # Leader logic
 │   │   ├── follower.go     # Follower logic
 │   │   └── failover.go     # Failover handling
 ├── pkg/
 │   └── logger/             # Logging utilities
-│       └── logger.go       # Logger setup and utilities
+│       └── logger.go       # Logger setup and utilities (pending)
 ├── configs/
-│   └── config.yaml         # Configuration file (e.g., ports, paths, etc.)
+│   └── config.yaml         # Configuration file (e.g., ports, paths, etc.) (pending)
 ├── scripts/
-│   ├── build.sh            # Build script
-│   ├── start_simulation.sh  # Script to start one leader and two follower instances
-│   └── deploy.sh           # Deployment script
+│   ├── build_run.sh            # Build script
 ├── tests/
-├── Dockerfile              # Dockerfile for containerization
+├── Dockerfile              # Dockerfile for containerization (to be added)
 ├── go.mod                  # Go module definition
 ├── go.sum                  # Dependency tracking
 └── README.md               # Project documentation
@@ -248,6 +246,10 @@ Follow the steps below to set up and run the KeyValue-Store application.
 - Ensure all ports specified in the script (e.g., `8080`, `8081`, `8082`) are available on your system.
 - The script assumes the Go environment is properly set up and `GOPATH` is configured if needed.
 
+## Ongoing Improvements
+1. Deployment: Adding docker to be able to run the application without installing go
+2. More test coverage
+3. Leader election : Ocassionally, previous failed leader instanceId is being returned as the leader Id. This is being resolved but keeping track of failed leaders. Submitted like this due to time constraint
 ## KeyValue-Store Application Endpoints 
 
 <div class="endpoint">
@@ -383,9 +385,7 @@ curl -X POST "http://localhost:8080/batchput" -d '[{"key":"key1","value":"value1
         <p><strong>Endpoint:</strong> <code>DELETE /delete</code></p>
         <p><strong>Description:</strong> Used to delete a key-value pair.</p>
 <h5>Sample Request:</h5>
-        <pre>
-curl -X DELETE "http://localhost:8080/delete?key=sampleKey"
-        </pre>
+<pre>curl -X DELETE "http://localhost:8080/delete?key=sampleKey"</pre>
 <h5>Sample Response:</h5>
 <pre>
 {
