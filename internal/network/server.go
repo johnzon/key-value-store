@@ -121,7 +121,7 @@ func (s *Server) handleBatchPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var batch map[string][]byte
+	var batch map[string]string
 	err := json.NewDecoder(r.Body).Decode(&batch)
 	if err != nil {
 		http.Error(w, "Failed to decode JSON", http.StatusBadRequest)
@@ -129,7 +129,7 @@ func (s *Server) handleBatchPut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for key, value := range batch {
-		if err := s.store.Put(key, value); err != nil {
+		if err := s.store.Put(key, []byte(value)); err != nil {
 			http.Error(w, "Failed to store key-value pair", http.StatusInternalServerError)
 			return
 		}
