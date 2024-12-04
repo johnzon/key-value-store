@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"keyvalue-store/internal/network"
+	"keyvalue-store/internal/storage"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +21,7 @@ type LeaderServer struct {
 	port           string
 	httpServer     *http.Server
 	routeServer    *network.Server
+	store          *storage.Storage
 }
 
 // RaftLeaderElection defines the Raft leader election and heartbeat process
@@ -46,12 +48,14 @@ func NewRaftLeaderElection(candidateID string, heartbeatInterval, heartbeatTimeo
 }
 
 // NewLeaderServer creates and initializes a new leader server
-func NewLeaderServer(candidateID, port string, heartbeatInterval, heartbeatTimeout time.Duration) (*LeaderServer, error) {
+func NewLeaderServer(candidateID, port string, heartbeatInterval, heartbeatTimeout time.Duration, store *storage.Storage) (*LeaderServer, error) {
 	leaderElection := NewRaftLeaderElection(candidateID, heartbeatInterval, heartbeatTimeout)
 	server := &LeaderServer{
 		LeaderElection: leaderElection,
 		port:           port,
 		httpServer:     &http.Server{Addr: port},
+		store:          store,
+		routeServer:    network.NewServer(store),
 	}
 	return server, nil
 }

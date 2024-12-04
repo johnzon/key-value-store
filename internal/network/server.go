@@ -72,6 +72,8 @@ func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Key is required", http.StatusBadRequest)
 		return
 	}
+	// Debugging log
+	log.Printf("Reading key: %s", key)
 
 	value, err := s.store.Read(key)
 	if err != nil {

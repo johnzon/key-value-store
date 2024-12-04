@@ -250,6 +250,7 @@ Follow the steps below to set up and run the KeyValue-Store application.
 1. Deployment: Adding docker to be able to run the application without installing go
 2. More test coverage
 3. Leader election : Ocassionally, previous failed leader instanceId is being returned as the leader Id. This is being resolved but keeping track of failed leaders. Submitted like this due to time constraint
+4. Authentication Middleware
 
 ## API Endpoints for Key-Value Store
 

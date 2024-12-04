@@ -2,7 +2,9 @@ package tests
 
 import (
 	"keyvalue-store/internal/replication"
+	"keyvalue-store/internal/storage"
 	"log"
+	"os"
 	"testing"
 	"time"
 )
@@ -14,8 +16,23 @@ func TestLeaderFollowerInteraction(t *testing.T) {
 	heartbeatInterval := 2 * time.Second
 	heartbeatTimeout := 5 * time.Second
 
+	// Paths for the WAL and SnapshotManager
+	walPath := "test_wal.log"
+	snapshotPath := "test_snapshot"
+
+	// Clean up test files
+	defer os.Remove(walPath)
+	defer os.Remove(snapshotPath)
+
+	// Create the storage system with WAL and SnapshotManager
+	store, err := storage.NewStorage("test_data.log", walPath, snapshotPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
 	// Create and initialize the leader server
-	leaderServer, err := replication.NewLeaderServer(candidateID, port, heartbeatInterval, heartbeatTimeout)
+	leaderServer, err := replication.NewLeaderServer(candidateID, port, heartbeatInterval, heartbeatTimeout, store)
 	if err != nil {
 		t.Fatalf("Failed to create leader server: %v", err)
 	}

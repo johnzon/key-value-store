@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"keyvalue-store/internal/replication"
+	"keyvalue-store/internal/storage"
 	"log"
 	"os"
 	"os/signal"
@@ -21,6 +22,9 @@ func main() {
 	leaderHeartbeatInterval := flag.Duration("leaderHeartbeatInterval", 2*time.Second, "Interval between leader heartbeats")
 	leaderHeartbeatTimeout := flag.Duration("leaderHeartbeatTimeout", 5*time.Second, "Timeout for leader heartbeats")
 	leaderURL := flag.String("leaderURL", "http://localhost:8080", "URL of the leader server (for follower)")
+	walPath := "wal.log"
+	snapshotPath := "snapshot.log"
+	filePath := "data.log"
 
 	flag.Parse()
 
@@ -29,6 +33,12 @@ func main() {
 	}
 	if !*isLeader && !*isFollower {
 		log.Fatal("Please specify either -leader or -follower.")
+	}
+
+	// Initialize the storage
+	store, err := storage.NewStorage(filePath, walPath, snapshotPath)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 
 	// Handle leader case
@@ -65,6 +75,7 @@ func main() {
 			*leaderPort,
 			*leaderHeartbeatInterval,
 			*leaderHeartbeatTimeout,
+			store,
 		)
 
 		if err != nil {
