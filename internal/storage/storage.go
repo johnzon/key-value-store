@@ -1,227 +1,343 @@
 package storage
 
 import (
+	"encoding/binary"
 	"errors"
-	"keyvalue-store/internal/transaction"
+	"fmt"
+	"log"
 	"os"
-	"sort"
 	"sync"
-	"time"
+
+	"github.com/google/btree"
 )
+
+// DataStore defines the interface for the storage operations
+type DataStore interface {
+	Put(key string, value []byte) error
+	Delete(key string) error
+	BatchPut(entries map[string][]byte) error
+	Get(key string) ([]byte, error)
+	RangeQuery(startKey, endKey string) (map[string][]byte, error)
+	SaveIndex(indexPath string) error
+	LoadIndex(indexPath string) error
+	Close() error
+	Sync() error
+}
+
+type Storage struct {
+	file        *os.File
+	index       map[string]int64 // In-memory index (key -> file offset)
+	sortedIndex *btree.BTree     //secondary index for range queries
+	writeMutex  sync.Mutex       // Ensures thread-safe writes
+	writePos    int64            // Current write position in file
+}
+
+// a secondary index sorted for effective range query
+type btreeItem struct {
+	key    string
+	offset int64
+}
 
 var (
 	ErrKeyNotFound = errors.New("key not found")
 )
 
-type record struct {
-	key    string
-	offset int64
+// Less compares two btree items by key
+func (b btreeItem) Less(than btree.Item) bool {
+	return b.key < than.(btreeItem).key
 }
 
-// Storage represents the key-value storage system
-type Storage struct {
-	dataFile        *os.File
-	index           []record // Sorted slice of key-offset pairs
-	indexMutex      sync.RWMutex
-	wal             *transaction.WAL
-	snapshotManager *transaction.SnapshotManager
-}
-
-// NewStorage initializes the storage system
-func NewStorage(filePath string, walPath string, snapshotPath string) (*Storage, error) {
-	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+// Open initializes a new Bitcask storage instance and rebuilds the index from the log
+func Open(path string) (*Storage, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
 	}
 
-	wal, err := transaction.NewWAL(walPath)
-	if err != nil {
+	b := &Storage{
+		file:        file,
+		index:       make(map[string]int64),
+		sortedIndex: btree.New(2),
+	}
+
+	if err := b.rebuildIndex(); err != nil {
 		return nil, err
 	}
 
-	snapshotManager := transaction.NewSnapshotManager(snapshotPath)
-
-	return &Storage{
-		dataFile:        file,
-		index:           []record{},
-		wal:             wal,
-		snapshotManager: snapshotManager,
-	}, nil
+	return b, nil
 }
 
-// Put stores a key-value pair
-func (s *Storage) Put(key string, value []byte) error {
-	s.indexMutex.Lock()
-	defer s.indexMutex.Unlock()
+// rebuildIndex reconstructs the in-memory index from the append-only log
+func (b *Storage) rebuildIndex() error {
+	b.writePos = 0
 
-	// Log the operation to WAL
-	logRecord := &transaction.LogRecord{
-		Timestamp: time.Now(),
-		Operation: "PUT",
-		Key:       key,
-		Value:     value,
-	}
-	err := s.wal.WriteLog(logRecord)
-	if err != nil {
-		return err
-	}
+	for {
+		offset := b.writePos
 
-	// Append the key-value pair to the data file
-	offset, err := s.dataFile.Seek(0, os.SEEK_END)
-	if err != nil {
-		return err
-	}
+		keyLenBuf := make([]byte, 8)
+		valueLenBuf := make([]byte, 8)
+		if _, err := b.file.ReadAt(keyLenBuf, offset); err != nil {
+			break
+		}
+		if _, err := b.file.ReadAt(valueLenBuf, offset+8); err != nil {
+			break
+		}
 
-	dataRecord := append([]byte(key+"|"), value...)
-	dataRecord = append(dataRecord, '\n') // Add newline for separation
-	_, err = s.dataFile.Write(dataRecord)
-	if err != nil {
-		return err
-	}
+		keyLen := binary.BigEndian.Uint64(keyLenBuf)
+		valueLen := binary.BigEndian.Uint64(valueLenBuf)
 
-	// Insert the key in sorted order in the index
-	index := sort.Search(len(s.index), func(i int) bool {
-		return s.index[i].key >= key
-	})
+		totalLen := 16 + int64(keyLen) + int64(valueLen)
+		if totalLen <= 0 {
+			log.Println("Corrupted entry detected, stopping index rebuild")
+			break
+		}
 
-	// Replace if key exists, otherwise insert
-	if index < len(s.index) && s.index[index].key == key {
-		// If the key already exists, update the offset
-		s.index[index].offset = offset
-	} else {
-		// Insert a new record (key and offset) into the sorted index
-		newRecord := record{key: key, offset: offset}
-		s.index = append(s.index[:index], append([]record{newRecord}, s.index[index:]...)...)
+		key := make([]byte, keyLen)
+		if _, err := b.file.ReadAt(key, offset+16); err != nil {
+			break
+		}
+
+		b.index[string(key)] = offset
+		b.writePos += totalLen
 	}
 
 	return nil
 }
 
-// BatchPut stores multiple key-value pairs atomically
-func (s *Storage) BatchPut(keys []string, values [][]byte) error {
-	if len(keys) != len(values) {
-		return errors.New("keys and values must have the same length")
+// Put writes a key-value pair to the append-only log
+func (b *Storage) Put(key string, value []byte) error {
+	b.writeMutex.Lock()
+	defer b.writeMutex.Unlock()
+
+	// Prepare entry: key length + value length + key + value
+	entry := make([]byte, 8+8+len(key)+len(value))
+	binary.BigEndian.PutUint64(entry[0:8], uint64(len(key)))
+	binary.BigEndian.PutUint64(entry[8:16], uint64(len(value)))
+	copy(entry[16:16+len(key)], key)
+	copy(entry[16+len(key):], value)
+
+	// Write entry to file
+	offset := b.writePos
+	n, err := b.file.Write(entry)
+	if err != nil {
+		return err
 	}
 
-	s.indexMutex.Lock()
-	defer s.indexMutex.Unlock()
+	b.writePos += int64(n)
 
-	for i, key := range keys {
-		// Append the key-value pair to the data file
-		offset, err := s.dataFile.Seek(0, os.SEEK_END)
-		if err != nil {
+	// Update in-memory index
+	b.index[key] = offset
+
+	b.sortedIndex.ReplaceOrInsert(btreeItem{key, offset})
+	return nil
+}
+
+// Delete removes a key-value pair from the storage.
+func (b *Storage) Delete(key string) error {
+	b.writeMutex.Lock()
+	defer b.writeMutex.Unlock()
+
+	// Check if the key exists
+	offset, exists := b.index[key]
+	if !exists {
+		return fmt.Errorf("key %s not found", key)
+	}
+
+	// Prepare delete marker entry: 'DEL' + key length + key
+	entry := make([]byte, 3+8+len(key))
+	copy(entry[0:3], "DEL")
+	binary.BigEndian.PutUint64(entry[3:11], uint64(len(key)))
+	copy(entry[11:], key)
+
+	// Write delete marker to file
+	n, err := b.file.Write(entry)
+	if err != nil {
+		return err
+	}
+
+	b.writePos += int64(n)
+
+	// Remove from in-memory index
+	delete(b.index, key)
+	b.sortedIndex.Delete(btreeItem{key, offset})
+
+	return nil
+}
+
+func (b *Storage) BatchPut(entries map[string][]byte) error {
+	b.writeMutex.Lock()
+	defer b.writeMutex.Unlock()
+
+	var batchData []byte
+	var offsetUpdates []struct {
+		key    string
+		offset int64
+	}
+
+	// Prepare all entries and collect them for batch insertion
+	var sortedEntries []btree.Item
+
+	for key, value := range entries {
+		// Prepare each entry: key length + value length + key + value
+		entry := make([]byte, 8+8+len(key)+len(value))
+		binary.BigEndian.PutUint64(entry[0:8], uint64(len(key)))
+		binary.BigEndian.PutUint64(entry[8:16], uint64(len(value)))
+		copy(entry[16:16+len(key)], key)
+		copy(entry[16+len(key):], value)
+
+		// Append entry to batch data
+		batchData = append(batchData, entry...)
+		b.writePos += int64(len(entry)) // Update write position for the next entry
+
+		// Store the offset update for each key
+		offsetUpdates = append(offsetUpdates, struct {
+			key    string
+			offset int64
+		}{key: key, offset: b.writePos - int64(len(entry))})
+
+		// Prepare entry for sorted index
+		sortedEntries = append(sortedEntries, btreeItem{key, b.writePos - int64(len(entry))})
+	}
+
+	// Write all entries at once to the file
+	_, err := b.file.Write(batchData)
+	if err != nil {
+		return err
+	}
+
+	// Update the sorted index in bulk
+	for _, entry := range sortedEntries {
+		b.sortedIndex.ReplaceOrInsert(entry)
+	}
+
+	// Update the in-memory index with all offsets in one go
+	for _, update := range offsetUpdates {
+		b.index[update.key] = update.offset
+	}
+
+	return nil
+}
+
+// Get retrieves a value by key
+func (b *Storage) Get(key string) ([]byte, error) {
+	offset, exists := b.index[key]
+	if !exists {
+		return nil, ErrKeyNotFound
+	}
+	return b.readValueAtOffset(offset)
+}
+
+// RangeQuery retrieves all key-value pairs between startKey and endKey (inclusive)
+func (b *Storage) RangeQuery(startKey, endKey string) (map[string][]byte, error) {
+	result := make(map[string][]byte)
+
+	// Iterate over the in-memory index to find all keys in the range [startKey, endKey]
+	for key, offset := range b.index {
+		if key >= startKey && key <= endKey {
+			// Key is within the range, retrieve its value from the file at the offset
+			value, err := b.readValueAtOffset(offset)
+			if err != nil {
+				return nil, err
+			}
+			result[key] = value
+		}
+	}
+
+	return result, nil
+}
+
+// readValueAtOffset reads the value of a key from the file at the given offset
+func (b *Storage) readValueAtOffset(offset int64) ([]byte, error) {
+	// Move the file pointer to the offset of the key-value pair
+	b.file.Seek(offset, 0)
+
+	// Read value length
+	valueLenBuf := make([]byte, 8)
+	if _, err := b.file.Read(valueLenBuf); err != nil {
+		return nil, err
+	}
+
+	valueLen := binary.BigEndian.Uint64(valueLenBuf)
+
+	// Read the value corresponding to the key
+	value := make([]byte, valueLen)
+	if _, err := b.file.Read(value); err != nil {
+		return nil, err
+	}
+
+	return value, nil
+}
+
+// SaveIndex persists the in-memory index to a file on disk.
+func (b *Storage) SaveIndex(indexPath string) error {
+	// Open the index file for writing
+	indexFile, err := os.OpenFile(indexPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer indexFile.Close()
+
+	// Write the index to the file
+	for key, offset := range b.index {
+		// Write the key length and key itself
+		keyLen := uint64(len(key))
+		if err := binary.Write(indexFile, binary.BigEndian, keyLen); err != nil {
+			return err
+		}
+		if _, err := indexFile.Write([]byte(key)); err != nil {
 			return err
 		}
 
-		dataRecord := append([]byte(key+"|"), values[i]...)
-		dataRecord = append(dataRecord, '\n') // Add newline for separation
-		_, err = s.dataFile.Write(dataRecord)
-		if err != nil {
+		// Write the offset
+		if err := binary.Write(indexFile, binary.BigEndian, offset); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// LoadIndex loads the index from a file on startup.
+func (b *Storage) LoadIndex(indexPath string) error {
+	// Open the index file for reading
+	indexFile, err := os.OpenFile(indexPath, os.O_RDONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer indexFile.Close()
+
+	// Read the index from the file
+	for {
+		var keyLen uint64
+		if err := binary.Read(indexFile, binary.BigEndian, &keyLen); err != nil {
+			break // End of file
+		}
+
+		// Read the key
+		key := make([]byte, keyLen)
+		if _, err := indexFile.Read(key); err != nil {
 			return err
 		}
 
-		// Insert key in sorted order
-		index := sort.Search(len(s.index), func(i int) bool {
-			return s.index[i].key >= key
-		})
-
-		// Replace if key exists, otherwise insert
-		if index < len(s.index) && s.index[index].key == key {
-			s.index[index].offset = offset
-		} else {
-			s.index = append(s.index[:index], append([]record{{key, offset}}, s.index[index:]...)...)
+		// Read the offset
+		var offset int64
+		if err := binary.Read(indexFile, binary.BigEndian, &offset); err != nil {
+			return err
 		}
+
+		// Update the in-memory index
+		b.index[string(key)] = offset
 	}
 
 	return nil
 }
 
-// Read retrieves the value associated with a key
-func (s *Storage) Read(key string) ([]byte, error) {
-	s.indexMutex.RLock()
-	defer s.indexMutex.RUnlock()
-
-	// Binary search for the key
-	index := sort.Search(len(s.index), func(i int) bool {
-		return s.index[i].key >= key
-	})
-
-	if index == len(s.index) || s.index[index].key != key {
-		return nil, ErrKeyNotFound
-	}
-
-	offset := s.index[index].offset
-	// Seek to the offset and read the data
-	s.dataFile.Seek(offset, os.SEEK_SET)
-
-	buf := make([]byte, 1024) // Assume max size of a record is 1024 bytes
-	n, err := s.dataFile.Read(buf)
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract the value from the record
-	record := buf[:n]
-	sepIndex := len(key) + 1 // key|value format, +1 for the '|'
-	if string(record[:sepIndex-1]) != key {
-		return nil, ErrKeyNotFound
-	}
-	return record[sepIndex:], nil
+// Close gracefully shuts down the Bitcask storage
+func (b *Storage) Close() error {
+	return b.file.Close()
 }
 
-// ReadKeyRange retrieves all key-value pairs within the specified key range [startKey, endKey].
-func (s *Storage) ReadKeyRange(startKey, endKey string) (map[string][]byte, error) {
-	s.indexMutex.RLock()
-	defer s.indexMutex.RUnlock()
-
-	results := make(map[string][]byte)
-
-	// Find the start index using binary search
-	startIndex := sort.Search(len(s.index), func(i int) bool {
-		return s.index[i].key >= startKey
-	})
-
-	// Iterate over the sorted keys in range
-	for i := startIndex; i < len(s.index) && s.index[i].key <= endKey; i++ {
-		offset := s.index[i].offset
-
-		// Read the value from the file
-		s.dataFile.Seek(offset, os.SEEK_SET)
-		buf := make([]byte, 1024)
-		n, err := s.dataFile.Read(buf)
-		if err != nil {
-			return nil, err
-		}
-
-		record := buf[:n]
-		key := s.index[i].key
-		sepIndex := len(key) + 1
-		if string(record[:sepIndex-1]) == key {
-			results[key] = record[sepIndex:]
-		}
-	}
-
-	return results, nil
-}
-
-// Delete removes a key from the index (soft delete)
-func (s *Storage) Delete(key string) error {
-	s.indexMutex.Lock()
-	defer s.indexMutex.Unlock()
-
-	index := sort.Search(len(s.index), func(i int) bool {
-		return s.index[i].key >= key
-	})
-
-	if index == len(s.index) || s.index[index].key != key {
-		return ErrKeyNotFound
-	}
-
-	s.index = append(s.index[:index], s.index[index+1:]...)
-	return nil
-}
-
-// Close ensures the file handle is properly closed
-func (s *Storage) Close() error {
-	return s.dataFile.Close()
+// Sync ensures all writes are flushed to disk
+func (b *Storage) Sync() error {
+	return b.file.Sync()
 }

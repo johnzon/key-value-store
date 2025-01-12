@@ -1,160 +1,74 @@
 package network
 
 import (
-	"encoding/json"
-	"io/ioutil"
-	"keyvalue-store/internal/storage"
+	"keyvalue-store/internal/node"
 	"log"
 	"net/http"
 )
 
+// Server represents the network layer for handling API requests
 type Server struct {
-	store *storage.Storage
+	Node         node.NodeHandler      // Reference to the associated Node
+	HTTPServer   *http.Server          // Embedded HTTP server
+	Router       *http.ServeMux        // Router for API endpoints
+	Communicator node.NodeCommunicator // Handles inter-node communication
 }
 
-func NewServer(store *storage.Storage) *Server {
-	return &Server{store: store}
+func NewServer(node node.NodeHandler, port string) *Server {
+	router := http.NewServeMux()
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: router,
+	}
+
+	s := &Server{
+		Node:       node,
+		HTTPServer: server,
+		Router:     router,
+	}
+
+	// Define API routes
+	s.Router.HandleFunc("/read", s.HandleRead)
+	s.Router.HandleFunc("/put", s.HandleWrite)
+	s.Router.HandleFunc("/batchput", s.HandleBatchWrite)
+	s.Router.HandleFunc("/delete", s.HandleDelete)
+	s.Router.HandleFunc("/range", s.HandleBatchQuery)
+	s.Router.HandleFunc("/heartbeat", s.handleHeartbeat)
+	s.Router.HandleFunc("/register_follower", s.HandleRegisterFollower)
+	s.Router.HandleFunc("/vote", s.handleVoteRequest)
+	s.Router.HandleFunc("/batch-replicate", s.HandleBatchReplicate)
+	s.Router.HandleFunc("/replicate", s.HandleReplication)
+
+	return s
 }
 
-func (s *Server) RegisterRoutes() {
-	http.HandleFunc("/put", s.handlePut)
-	http.HandleFunc("/read", s.handleRead)
-	http.HandleFunc("/range", s.handleReadRange)
-	http.HandleFunc("/batchput", s.handleBatchPut)
-	http.HandleFunc("/delete", s.handleDelete)
-}
+// Start runs the server based on the node's role
+func (s *Server) Start() error {
+	serverReady := make(chan bool)
 
-func (s *Server) Start(address string) {
-	log.Printf("Starting server on %s...\n", address)
-
-	// Register the routes
-	s.RegisterRoutes()
-
-	// Start listening for incoming requests
-	log.Fatal(http.ListenAndServe(address, nil))
-}
-
-func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "Invalid HTTP method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "Key is required", http.StatusBadRequest)
-		return
-	}
-
-	value, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
-		return
-	}
-
-	err = s.store.Put(key, value)
-	if err != nil {
-		http.Error(w, "Failed to store key-value pair", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Invalid HTTP method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "Key is required", http.StatusBadRequest)
-		return
-	}
-	// Debugging log
-	log.Printf("Reading key: %s", key)
-
-	value, err := s.store.Read(key)
-	if err != nil {
-		http.Error(w, "Key not found", http.StatusNotFound)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(value)
-}
-
-func (s *Server) handleReadRange(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Invalid HTTP method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	startKey := r.URL.Query().Get("start")
-	endKey := r.URL.Query().Get("end")
-	if startKey == "" || endKey == "" {
-		http.Error(w, "StartKey and EndKey are required", http.StatusBadRequest)
-		return
-	}
-
-	results, err := s.store.ReadKeyRange(startKey, endKey)
-	if err != nil {
-		http.Error(w, "Failed to retrieve key range", http.StatusInternalServerError)
-		return
-	}
-
-	jsonResponse, err := json.Marshal(results)
-	if err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write(jsonResponse)
-}
-
-func (s *Server) handleBatchPut(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Invalid HTTP method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var batch map[string]string
-	err := json.NewDecoder(r.Body).Decode(&batch)
-	if err != nil {
-		http.Error(w, "Failed to decode JSON", http.StatusBadRequest)
-		return
-	}
-
-	for key, value := range batch {
-		if err := s.store.Put(key, []byte(value)); err != nil {
-			http.Error(w, "Failed to store key-value pair", http.StatusInternalServerError)
-			return
+	// Start the HTTP server in a goroutine
+	go func() {
+		log.Printf("Server starting on port %s...", s.HTTPServer.Addr)
+		serverReady <- true // Signal server readiness
+		if err := s.HTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
 		}
+	}()
+
+	// Wait for server readiness
+	<-serverReady
+
+	// Start Node-specific logic
+
+	if s.Node.IsLeader() {
+		log.Println("Starting node as LEADER...")
+		go s.Node.StartLeader()
+	} else if s.Node.IsFollower() {
+		log.Println("Starting node as FOLLOWER...")
+		go s.Node.StartFollower()
+	} else {
+		log.Fatalf("Invalid node role specified")
 	}
 
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "Invalid HTTP method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	key := r.URL.Query().Get("key")
-	if key == "" {
-		http.Error(w, "Key is required", http.StatusBadRequest)
-		return
-	}
-
-	err := s.store.Delete(key)
-	if err != nil {
-		http.Error(w, "Failed to delete key", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
+	return nil
 }

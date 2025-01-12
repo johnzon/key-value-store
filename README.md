@@ -1,172 +1,185 @@
-# Persistent Key/Value System Documentation
+# Key/Value  Store System Documentation
 
 ## Objective
 To design and implement a network-available, persistent Key/Value store that adheres to the provided interface and achieves specific performance, reliability, and scalability requirements. The system is implemented in golang and uses only the standard library.
 
 ---
 
-## Features
+## Requirements
 
-### Interfaces
+### Functional Requirements 
+the system should have the following interfaces
 1. **Put(Key, Value)**: Inserts or updates the value for the given key.
 2. **Read(Key)**: Retrieves the value associated with the given key.
 3. **ReadKeyRange(StartKey, EndKey)**: Fetches values for keys within the specified range.
 4. **BatchPut(..keys, ..values)**: Allows multiple key-value pairs to be written in a single operation.
 5. **Delete(Key)**: Removes the specified key and its associated value.
 
+### Non-Functional Requirements 
+1. **Low latency**
+2. **High throughput**
+3. **Crash Friendliness**
+4. **Replication(Nice to have)**
+5. **Resilience**
 ---
 
-## Design Considerations
+## Key Design Decisions
 
-### Key Objectives
-1. **Low Latency**: Optimized data structures and caching techniques for efficient read/write operations.
-2. **High Throughput**: Batch processing and streamlined I/O handling for bulk operations.
-3. **Scalability**: Support for datasets larger than RAM using persistent storage.
-4. **Crash Resilience**: Write-ahead logging (WAL) and periodic snapshots to prevent data loss.
-5. **Predictable Performance**: Rate limiting and connection pooling for stable performance under heavy loads.
+### 1. Low Latency per Item Read or Written
+- **In-Memory Index (`map[string]int64`)**: Enables O(1) key-to-offset mapping for fast lookups.
+- **Secondary Sorted Index (`btree.BTree`)**: Supports efficient range queries, minimizing latency for sequential reads.
+- **Thread-Safe Writes with `sync.Mutex`**: Ensures consistent updates while minimizing latency for concurrent operations.
 
-### Bonus Features
-1. **Replication**: Data is replicated across multiple nodes for fault tolerance.
-2. **Failover Handling**: Automatic redirection of requests to healthy nodes during failures.
+### 2. High Throughput, Especially When Writing an Incoming Stream of Random Items
+- **Append-Only Write-Ahead Log (WAL)**: Sequential writes minimize disk seek times, enhancing write throughput.
+- **Batch Operations**: Allows multiple writes to be processed together, reducing the overhead associated with individual writes.
+
+
+### 3. Ability to Handle Datasets Much Larger Than RAM Without Degradation
+- **Occasional Flushing of Index to Disk**: Large in-memory index structures are occasionally flushed to disk to reduce memory usage and ensure consistency without impacting write performance.
+- **Checkpointing for Faster Recovery**: Periodic snapshots of the in-memory index reduce recovery time by limiting the need to process the entire WAL after a crash.
+
+
+### 4. Crash Friendliness (Fast Recovery and No Data Loss)
+- **WAL Recovery on Crash**: On startup, the system reads the WAL to rebuild the in-memory index, ensuring no data is lost.
+- **Clean Shutdown Mechanism**: Ensures that all data is flushed and state is consistent before the system shuts down.
+- **Checkpointing**: Reduces recovery time by limiting the extent of WAL replay during initialization.
+
+
+### 5. Predictable Behavior Under Heavy Access Load or Large Volume
+- **Replication**: Allows access from multiple nodes
+- **Sharding**: While sharding can greatly help here, this implementation does not cover sharding.
+
+
+### 6. Replicate Data to Multiple Nodes
+- **Asynchronous Replication**: Ensures that data is propagated to replicas without impacting the performance of the primary node.
+- **Design Extensibility**: The architecture allows for WAL sharing across nodes, facilitating replication.
+
+
+### 7. Handle Automatic Failover to Other Nodes
+- **Node Monitoring with Raft Election**: Enables nodes to monitor each other and automatically elect a new leader in case of failure.
+- **Checkpointing**: Enhances failover readiness by enabling quicker recovery from a known consistent state.
+
+### 8. Trade Offs
+- **Eventual consistency**: Asynchronous replication while contributing to low latency has the side effects of eventual consistency as against strong consistency after a write operation.
+- **Simplicity**: The complexity of Sharding has not been introduce yet for simplicity reason. Each Shard will have its node replicas
 
 ---
-
 ## Solution Components
 
-### 1. **Storage Layer**
+### Storage Component
 
-The storage module implements a **persistent key-value store** with the following features:
+The storage layer uses a **log-structured design** that combines an append-only log file, an in-memory index, and a secondary B-Tree index for flexible lookups. All writes are appended to the log file, ensuring durability. The in-memory index maintains key-to-file-offset mappings for fast lookups, while the secondary B-Tree index supports range queries and additional query types. Periodically, the in-memory index and secondary index are flushed to disk to maintain persistence and crash recovery.
 
-1. **Efficient Key Management**:
-   - Keys and their file offsets are stored in a **sorted in-memory index** (`[]record`).
-   - Binary search is used for quick lookups, ensuring efficient read and write operations.
+##### Reasons for This Design
 
-2. **Persistence**:
-   - Data is stored in an **append-only log file** for durability.
-   - Each record is written in the format: `key|value\n`.
+1. **Simplicity**: This approach is straightforward to implement and avoids the complexity of full LSM Trees, such as segment compaction and merging.
+2. **Write Efficiency**: The append-only log ensures fast, sequential writes, which are optimal for high-throughput scenarios.
+3. **Read Efficiency**: The combination of in-memory and secondary indices allows for quick lookups and range queries without rebuilding indices.
+4. **Crash Recovery**: The append-only log ensures durability, while periodic flushing of indices supports fast recovery after crashes.
 
-3. **Key-Range Queries**:
-   - Supports reading key-value pairs within a specified range using the sorted index for fast range scans.
+##### Possible Alternatives
 
-4. **Concurrency**:
-   - Read-write locks (`sync.RWMutex`) protect the in-memory index, ensuring thread-safe operations.
+1. **Full LSM Tree**:
+   - **Pros**: Better suited for large-scale systems with frequent writes and updates due to its efficient compaction process.
+   - **Cons**: Adds complexity with compaction and merging, which may be unnecessary for simpler use cases.
 
-5. **Crash Recovery**:
-   - The append-only file guarantees durability, allowing recovery of data after crashes by reloading the log file and rebuilding the index.
+2. **Hash Map-Based Storage**:
+   - **Pros**: O(1) lookups and updates, ideal for low-latency requirements and single-key operations.
+   - **Cons**: Inefficient for range queries and doesn’t scale well for large datasets without significant memory.
 
-6. **Optimized Write Behavior**:
-   - New keys are inserted into the sorted index in logarithmic time, and existing keys are updated in place.
+3. **Pure B-Tree Storage**:
+   - **Pros**: Supports efficient range queries and maintains sorted order directly on disk.
+   - **Cons**: Slower writes due to the need for balanced tree updates and higher disk I/O.
 
-This design balances **performance**, **durability**, and **scalability**, making it suitable for production environments.
+#### Why This Design is Better for This Assignment
 
----
+This design strikes a balance between simplicity and functionality, making it suitable for a small-to-medium-scale key-value store. It provides efficient writes, fast lookups, and range query support without the overhead of complex compaction or balancing mechanisms. For this assignment, it ensures core objectives like low latency, high throughput, and crash recovery without introducing unnecessary complications.
 
-## Comparison of Key-Value Storage Approaches
+### Write-Ahead Log (WAL)
 
-### Two Approaches:
-1. **Hash Map Approach** : A key-value store implemented using a hash map, where keys are mapped to file offsets.
-2. **Sorted Slice Approach** : A key-value store implemented using a sorted slice of key-offset pairs, enabling efficient range queries and better scalability.
+The **Write-Ahead Log (WAL)** is crucial for durability, crash recovery, and data consistency in distributed systems. It logs all operations sequentially, enabling recovery from crashes by replaying log entries after the last consistent state.
 
-### Objective Comparison:
+#### Key Features
+- **Durability**: Ensures data is written to disk before changes are applied.
+- **Crash Recovery**: Replays operations after a crash to restore consistency.
+- **Raft Compatibility**: Tracks operations with terms and LSNs, integrating with Raft consensus.
 
-| Objective                                       | **Hash Map Approach**                          | **Sorted Slice Approach**                        |
-|-------------------------------------------------|------------------------------------------------|-------------------------------------------------|
-| **Low Latency per Read/Write**                  | O(1) for read/write                            | O(log n) for read, O(n) for write               |
-| **High Throughput (Random Writes)**             | High throughput, constant time for writes      | Lower throughput due to sorting insertions      |
-| **Large Datasets (Beyond RAM)**                 | Potential memory limitation, needs persistence | Handles larger-than-RAM with persistence, WAL   |
-| **Crash Friendliness**                          | Needs WAL/snapshots for persistence            | Built-in crash recovery with WAL and snapshots  |
-| **Range Queries**                               | Inefficient, requires sorting every query      | Efficient, can handle range queries efficiently |
+#### WAL Structure
+- **WALWriter Interface**: Methods for writing logs, recovery, and managing the last log index and term.
+- **WALEntry Struct**: Defines log entries with fields like LSN, term, operation, key, value, and timestamp.
+- **WAL Struct**: Manages the file, buffer, periodic flushes, and recovery.
 
-### Analysis:
+#### Methods
+- **WriteEntry**: Adds an entry to the WAL and flushes if the buffer size is exceeded.
+- **FlushBuffer**: Writes buffered entries to the disk, ensuring durability.
+- **Recover**: Replays WAL entries from the last applied LSN to restore the system.
+- **SetCommittedIndex**: Updates the committed index for the system state.
 
-1. **Low Latency per Item**:
-   - **Hash Map Approach**: Provides constant time complexity (O(1)) for both read and write operations, making it suitable for scenarios where low latency per operation is required.
-   - **Sorted Slice Approach**: Requires binary search for reads (O(log n)) and sorting insertions (O(n)), which makes it less optimal for single operations but better suited for range queries.
+### Raft Leader Election Implementation
 
-2. **High Throughput (Writing Random Items)**:
-   - **Hash Map Approach**: Since it uses constant time for writes, this approach is ideal for high-throughput, random writes, making it a good choice for environments with a high volume of data.
-   - **Sorted Slice Approach**: Sorting the data on insertion incurs additional overhead, so it may not handle high-throughput random writes as efficiently as the hash map approach.
+In the Raft consensus algorithm, nodes in the system transition between roles of **Leader**, **Follower**, and **Candidate** to maintain high availability and fault tolerance. The leader election process ensures that only one node acts as the leader at any given time. This process is crucial to avoid split-brain scenarios and ensure consistency across the system.
+The leader election process is triggered when a node detects that the current leader is inactive or fails to send heartbeats within a specified timeout period.
 
-3. **Handling Large Datasets (Beyond RAM)**:
-   - **Hash Map Approach**: Storing the entire dataset in memory limits scalability, making it harder to handle datasets larger than available RAM without additional persistence mechanisms.
-   - **Sorted Slice Approach**: This approach can handle larger-than-RAM datasets by offloading data to disk and using techniques like write-ahead logs (WAL) and snapshots, making it more suitable for large-scale systems.
 
-4. **Crash Friendliness**:
-   - **Hash Map Approach**: To ensure crash recovery, the hash map implementation needs additional mechanisms such as WAL or snapshots to persist data.
-   - **Sorted Slice Approach**: This approach inherently supports crash recovery through WAL and snapshot mechanisms, ensuring data integrity even during unexpected shutdowns.
+1. **Follower Node Monitoring**:
+   - Followers register with the Leader node as part of post startup operation. Followers continuously monitor the leader's heartbeat. If no heartbeat is received within the timeout, the follower assumes that the leader is inactive and transitions to the **Candidate** role.
+   - The node increments its term and votes for itself as part of the election process.
 
-5. **Range Queries**:
-   - **Hash Map Approach**: Inefficient for range queries since the data is not sorted. Sorting the data for every range query would be a time-consuming process.
-   - **Sorted Slice Approach**: Designed for efficient range queries. The sorted structure allows for quick binary search and retrieval of key ranges, making this approach ideal for handling range queries efficiently.
+2. **Candidate Role and Election**:
+   - Once in the **Candidate** role, the node broadcasts a vote request to all other followers. Each vote request includes the candidate’s term, last log index, and term.
+   - If the candidate receives a majority of votes, it becomes the leader for that term.
 
-### Conclusion:
-- **Hash Map Approach** is best suited for use cases where **low-latency individual reads and writes** are critical, and the data fits within memory limits.
-- **Sorted Slice Approach** is more suitable for **range queries**, **large datasets**, and **crash recovery**, offering better scalability and persistence mechanisms.
+3. **Leader Transition**:
+   - Upon winning the majority of votes, the node transitions to the **Leader** role, initiates periodic heartbeats to maintain leadership, and starts managing followers.
+   - If the election fails (i.e., the candidate does not receive enough votes), the node reverts to the **Follower** role and waits for the next election cycle.
 
-For a system requiring efficient range queries, large-scale handling, and crash recovery, **the Sorted Slice Approach** is recommended. If the system is focused on high-speed, low-latency individual operations, **the Hash Map Approach** can be considered.
+4. **Heartbeat Mechanism**:
+   - The leader node sends regular heartbeats to its followers to assert its authority and prevent new elections. Heartbeats are sent concurrently to all followers via a worker pool to optimize concurrency.
 
----
+5. **Follower Node Behavior**:
+   - Followers receive heartbeats from the leader and update their internal state, including the leader ID and term.
+   - If a follower detects a higher term from the leader, it transitions to the **Follower** role and updates its leader information.
 
-## Replication Layer Overview
 
-The **Replication Layer** ensures data consistency and high availability across multiple nodes in the key-value storage system. It follows a **Leader-Follower** architecture:
+#### Node Role Transitions
 
-1. **Leader Election**:
-   - Electing a leader using Raft's algorithm.
-   - Detecting leader failure and triggering failover to promote a new leader.
-   
-2. **Follower Replication**:
-   - Follower nodes replicate the leader's data to maintain consistency.
-   - Followers stay synchronized with the leader by applying the write-ahead logs (WAL) from the leader.
+- **From Follower to Candidate**: A follower becomes a candidate if it does not receive a heartbeat from the leader within a timeout period. It then starts the election process.
+- **From Candidate to Leader**: A candidate becomes the leader if it receives a majority of votes from followers.
+- **From Leader to Follower**: If a leader detects a higher term from another node, it steps down and becomes a follower.
 
-3. **Failover Handling**:
-   - In case of leader failure, a new leader is automatically elected.
-   - Followers detect leader failure and participate in the election process to ensure continued availability.
+#### Justification
+- **Simplicity and Understandability**: Compare to paxos and other node election algorithms, Raft is simple for our use case.
 
-4. **Log Synchronization**:
-   - Followers receive and apply the WAL from the leader to keep their data in sync.
-   - This ensures all nodes have the same data for read operations.
+#### Current Limitation
+- This implementation seeds the leader during startup since no external node ochestration is implemented yet. This implies that a node can be specified as Leader during startup. In real time, node ochestration can be delegated to an external node registry.
 
----
-## Raft Leader Election Implementation
 
-### Components
+## Replication Strategy
 
-#### 1. Leader Server
-- **Handles Leader Election**: Manages the election process via `StartLeaderElection`.
-- **Broadcasts Heartbeats**: Periodically sends heartbeats to followers.
-- **Registers Followers**: Enables followers to connect for updates.
-
-#### 2. Follower Server
-- **Monitors Leader**: Detects leader failure through the `MonitorLeader` function.
-- **Handles Heartbeats**: Updates leader status upon receiving heartbeats.
-- **Initiates Failover**: Triggers a new election if the leader is inactive.
-
-#### 3. Failover Manager
-- **Triggers Leader Re-Election**: Handles failover with `TriggerFailover`.
-
----
+The replication process is designed to ensure strong consistency and high availability in a distributed system. Our replication mechanism relies on writing to a Write-Ahead Log (WAL) and asynchronously replicating log entries to other nodes in the cluster. This approach provides an efficient, fault-tolerant method of ensuring that changes are propagated across the system while maintaining consistency.
 
 ### Workflow
 
-1. **Leader Election**: A node initiates `StartLeaderElection` to become leader.
-2. **Follower Monitoring**: Followers check heartbeats using `MonitorLeader`.
-3. **Failover**: If the leader fails, the `FailoverManager` triggers a new election.
+1. **WAL Writing**: When a new log entry is created (e.g., a client request or state change), the entry is first written to the local WAL. This guarantees durability and ensures that changes are not lost in the event of a crash.
 
----
+2. **Asynchronous Replication**: After writing to the WAL, the entry is asynchronously replicated to follower nodes. This ensures that the leader can continue processing new requests without waiting for followers to acknowledge the replication. Replication is done in parallel, leveraging concurrency to improve throughput and minimize latency.
 
-### Test Highlights
+3. **Last Committed Index**: Once the log entry is successfully replicated to the majority of followers, the leader commits the entry by appending a last committed index to the WAL. This index indicates the point at which the entry is considered durable and visible to all nodes in the system.
 
-- Leader sends heartbeats.
-- Follower detects leader failure and triggers a new election.
-- System ensures seamless leader replacement.
+4. **Failure Recovery and Retry Mechanism**: In the case of a replication failure, the system implements an exponential backoff retry strategy. This ensures that replication attempts are spaced out over time, reducing the load on the network and minimizing the chances of overwhelming the system. Each failed replication is retried with an increasing delay, helping to ensure that eventual consistency is reached without overburdening the system.
 
----
+5. **Replication Timeout and Consistency**: A replication timeout is set for each entry to ensure that it is eventually committed to a majority of nodes. If the replication fails within this timeout window, the leader will retry the operation using the backoff mechanism until success is achieved. This guarantees that the system maintains consistency across the cluster, even in the face of transient failures.
 
-### Configuration
+### Justification for Using WAL-Based Replication
 
-- **Heartbeat Interval**: 2 seconds  
-- **Heartbeat Timeout**: 10 seconds
+- **Fault Tolerance**: By writing to a WAL before attempting replication, we ensure that the system can recover from crashes or network failures without losing data. This approach provides a durable log of all changes, which can be replayed in the event of a failure, ensuring that no committed entry is lost.
+
+- **Asynchronous Replication for Performance**: Asynchronous replication ensures that the leader node does not become blocked while waiting for followers to acknowledge the replication. This improves the system's performance, as the leader can continue processing client requests without being slowed down by replication latency. This is critical for systems that require high throughput and low-latency processing.
+
+- **Scalable and Efficient**: Asynchronous replication is highly scalable, as the leader can replicate log entries to multiple followers concurrently. The retry mechanism with exponential backoff further optimizes replication by reducing the load during failure scenarios, ensuring that the system can scale without unnecessary strain.
+
+- **Consistency Guarantees**: The combination of WAL and majority-based replication ensures strong consistency. The leader guarantees that all committed entries are replicated to the majority of followers, preventing divergent state and ensuring that all nodes are eventually consistent.
 
 ---
 
@@ -208,24 +221,18 @@ keyvalue-store/
 ├── internal/
 │   ├── storage/            # Storage layer
 │   │   ├── storage.go      # Core storage implementation
-│   │   ├── compaction.go   # Log compaction implementation (pending)
-│   │   └── errors.go       # Custom storage-related errors (pending)
 │   ├── transaction/        # Transaction layer
 │   │   ├── wal.go          # Write-ahead logging
-│   │   └── snapshot.go     # Snapshot management
 │   ├── network/            # Networking layer
 │   │   ├── server.go       # HTTP server setup
 │   │   ├── handlers.go     # HTTP API handlers
-│   │   └── middleware.go   # Middleware for logging, metrics, etc. (pending)
-│   ├── replication/        # Replication layer (bonus)
+│   ├── node/               # Replication layer (bonus)
 │   │   ├── leader.go       # Leader logic
 │   │   ├── follower.go     # Follower logic
-│   │   └── failover.go     # Failover handling
-├── pkg/
-│   └── logger/             # Logging utilities
-│       └── logger.go       # Logger setup and utilities (pending)
-├── configs/
-│   └── config.yaml         # Configuration file (e.g., ports, paths, etc.) (pending)
+│   │   ├── node.go         # node core logic
+│   │   ├── communicator.go # nodes communication  logic
+│   │   ├── nodeHanlder.go  # Node interface
+│   │   └── request.go     # reuqest processing logic
 ├── scripts/
 │   ├── build_run.sh            # Build script
 ├── tests/
@@ -245,12 +252,6 @@ Follow the steps below to set up and run the KeyValue-Store application.
 
 - Ensure all ports specified in the script (e.g., `8080`, `8081`, `8082`) are available on your system.
 - The script assumes the Go environment is properly set up and `GOPATH` is configured if needed.
-
-## Ongoing Improvements
-1. Deployment: Adding docker to be able to run the application without installing go
-2. More test coverage
-3. Leader election : Ocassionally, previous failed leader instanceId is being returned as the leader Id. This is being resolved but keeping track of failed leaders. Submitted like this due to time constraint
-4. Authentication Middleware
 
 ## API Endpoints for Key-Value Store
 
@@ -364,26 +365,18 @@ Follow the steps below to set up and run the KeyValue-Store application.
     - If the `key` parameter is missing: `400 Bad Request`
     - If the HTTP method is incorrect: `405 Method Not Allowed`
 
----
+#### Areas of Improvements
 
-### Summary of Testing Steps
+- **Compression:** Log Files and Indexes Compression to reduce memory
+- **Index eviction:** Evict frequently used keys to reduce memory usage
+- **Garbage Collection**: Cleaning up of deleted keys. They are currently marked with tombstone markers
+- **Log compaction**  Compact log to remove deleted entries
+- **Segmented Indexing:** Divide index to chunks and load chunks as they are needed
+- **Node Discovery:** Use a separate service or gossip protocol to discover nodes in the cluster. Current approach can introduce split brain in some edge cases
+- **Dynamic Leader election:**. Start all nodes as followers and elect leader dynamically after node discovery
+- **Authentication Middleware:** Access is currently open. We need to protect the service with authentication
 
-1. **Test `/put`**:
-    - Send a PUT request with a `key` query parameter and the value as the request body.
 
-2. **Test `/read`**:
-    - Send a GET request with a `key` query parameter to retrieve the stored value.
-
-3. **Test `/range`**:
-    - Send a GET request with `start` and `end` key query parameters to retrieve a range of key-value pairs.
-
-4. **Test `/batchput`**:
-    - Send a POST request with a JSON body containing multiple key-value pairs.
-
-5. **Test `/delete`**:
-    - Send a DELETE request with a `key` query parameter to delete the specified key.
-
----
 
 
 
