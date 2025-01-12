@@ -17,6 +17,7 @@ import (
 
 func main() {
 	// Command-line flags
+	//Ports are here for testing, this wil be different IP address in a cluster
 	nodeRole := flag.String("role", "follower", "Role of the node: leader or follower")
 	port := flag.String("port", ":8080", "Port for the node server")
 	leaderURL := flag.String("leaderURL", "http://localhost:8080", "URL of the leader node (if follower)")

@@ -96,7 +96,7 @@ The storage layer uses a **log-structured design** that combines an append-only 
 
 This design strikes a balance between simplicity and functionality, making it suitable for a small-to-medium-scale key-value store. It provides efficient writes, fast lookups, and range query support without the overhead of complex compaction or balancing mechanisms. For this assignment, it ensures core objectives like low latency, high throughput, and crash recovery without introducing unnecessary complications.
 
-### Write-Ahead Log (WAL)
+### Write-Ahead Log (WAL) Component
 
 The **Write-Ahead Log (WAL)** is crucial for durability, crash recovery, and data consistency in distributed systems. It logs all operations sequentially, enabling recovery from crashes by replaying log entries after the last consistent state.
 
@@ -116,7 +116,7 @@ The **Write-Ahead Log (WAL)** is crucial for durability, crash recovery, and dat
 - **Recover**: Replays WAL entries from the last applied LSN to restore the system.
 - **SetCommittedIndex**: Updates the committed index for the system state.
 
-### Raft Leader Election Implementation
+### Raft Leader Election Component
 
 In the Raft consensus algorithm, nodes in the system transition between roles of **Leader**, **Follower**, and **Candidate** to maintain high availability and fault tolerance. The leader election process ensures that only one node acts as the leader at any given time. This process is crucial to avoid split-brain scenarios and ensure consistency across the system.
 The leader election process is triggered when a node detects that the current leader is inactive or fails to send heartbeats within a specified timeout period.
