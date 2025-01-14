@@ -42,9 +42,9 @@ type NodeHandler interface {
 	ProcessReplication(leaderID string, term int, key string, value []byte, timestamp int64, operation Operation) error
 
 	//Raft Operation
-	RequestVote(url string) error
+	RequestVote(url string) (bool, error)
 	ResetElectionTimer()
-	HandleHeartbeat(term int, leaderID string, sourceUrl string)
+	HandleHeartbeat(term int, leaderID string, sourceUrl string, followers map[string]string)
 
 	//Node getters
 	IsLeader() bool

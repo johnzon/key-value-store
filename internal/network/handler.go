@@ -112,7 +112,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid heartbeat payload", http.StatusBadRequest)
 		return
 	}
-	s.Node.HandleHeartbeat(hbReq.Term, hbReq.NodeID, hbReq.URL)
+	s.Node.HandleHeartbeat(hbReq.Term, hbReq.NodeID, hbReq.URL, hbReq.Followers)
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Heartbeat acknowledged from leader %s for term %d", hbReq.NodeID, hbReq.Term)

@@ -231,17 +231,16 @@ func (b *Storage) Get(key string) ([]byte, error) {
 func (b *Storage) RangeQuery(startKey, endKey string) (map[string][]byte, error) {
 	result := make(map[string][]byte)
 
-	// Iterate over the in-memory index to find all keys in the range [startKey, endKey]
-	for key, offset := range b.index {
-		if key >= startKey && key <= endKey {
-			// Key is within the range, retrieve its value from the file at the offset
-			value, err := b.readValueAtOffset(offset)
-			if err != nil {
-				return nil, err
-			}
-			result[key] = value
+	// Use the sortedIndex (B-tree) to perform a range query
+	b.sortedIndex.AscendRange(btreeItem{key: startKey}, btreeItem{key: endKey}, func(item btree.Item) bool {
+		bItem := item.(btreeItem)
+		value, err := b.readValueAtOffset(bItem.offset)
+		if err != nil {
+			return false
 		}
-	}
+		result[bItem.key] = value
+		return true
+	})
 
 	return result, nil
 }

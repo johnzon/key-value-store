@@ -14,7 +14,10 @@ import (
 	"syscall"
 	"time"
 )
-
+# Start the Leader in the background
+echo "Starting Leader on port $LEADER_PORT..."
+./keyvalue-store -role= -leaderPort=$LEADER_PORT -leaderHeartbeatInterval=$HEARTBEAT_INTERVAL -leaderHeartbeatTimeout=$HEARTBEAT_TIMEOUT &
+LEADER_PID=$!
 func main() {
 	// Command-line flags
 	//Ports are here for testing, this wil be different IP address in a cluster
